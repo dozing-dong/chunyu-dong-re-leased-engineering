@@ -1,21 +1,46 @@
-namespace RefactorThis.Persistence {
-	public class InvoiceRepository
+using System;
+using System.Collections.Generic;
+
+namespace RefactorThis.Persistence
+{
+	public class InvoiceRepository : IInvoiceRepository
 	{
-		private Invoice _invoice;
+		private readonly Dictionary<string, Invoice> _invoices = new Dictionary<string, Invoice>();
+		private Invoice _lastInvoice;
 
-		public Invoice GetInvoice( string reference )
+		public Invoice GetInvoice(string reference)
 		{
-			return _invoice;
+			if (!string.IsNullOrWhiteSpace(reference) && _invoices.TryGetValue(reference, out var invoice))
+			{
+				return invoice;
+			}
+			return _lastInvoice;
 		}
 
-		public void SaveInvoice( Invoice invoice )
+		public void SaveInvoice(Invoice invoice)
 		{
-			//saves the invoice to the database
+			if (invoice == null)
+			{
+				return;
+			}
+			if (!string.IsNullOrWhiteSpace(invoice.Reference))
+			{
+				_invoices[invoice.Reference] = invoice;
+			}
+			_lastInvoice = invoice;
 		}
 
-		public void Add( Invoice invoice )
+		public void Add(Invoice invoice)
 		{
-			_invoice = invoice;
+			if (invoice == null)
+			{
+				return;
+			}
+			if (!string.IsNullOrWhiteSpace(invoice.Reference))
+			{
+				_invoices[invoice.Reference] = invoice;
+			}
+			_lastInvoice = invoice;
 		}
 	}
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using RefactorThis.Persistence;
 
@@ -6,144 +7,114 @@ namespace RefactorThis.Domain
 {
 	public class InvoiceService
 	{
-		private readonly InvoiceRepository _invoiceRepository;
+		private const decimal CommercialTaxRate = 0.14m;
+		private readonly IInvoiceRepository _invoiceRepository;
 
-		public InvoiceService( InvoiceRepository invoiceRepository )
+		public InvoiceService( IInvoiceRepository invoiceRepository )
 		{
 			_invoiceRepository = invoiceRepository;
 		}
 
 		public string ProcessPayment( Payment payment )
 		{
-			var inv = _invoiceRepository.GetInvoice( payment.Reference );
+			var invoice = _invoiceRepository.GetInvoice( payment.Reference );
+			ValidateInvoiceExists( invoice );
+			ValidateInvoiceWithZeroAmount( invoice );
+			if ( invoice.Amount == 0 )
+			{
+				return "no payment needed";
+			}
+			var hasExistingPayments = HasExistingPayments( invoice );
+			if ( hasExistingPayments && IsInvoiceFullyPaid( invoice ) )
+			{
+				return "invoice was already fully paid";
+			}
+			if ( hasExistingPayments && IsPaymentExceedingRemaining( invoice, payment ) )
+			{
+				return "the payment is greater than the partial amount remaining";
+			}
+			if ( !hasExistingPayments && payment.Amount > invoice.Amount )
+			{
+				return "the payment is greater than the invoice amount";
+			}
+			var message = ApplyPaymentToInvoice( invoice, payment, hasExistingPayments );
+			_invoiceRepository.SaveInvoice( invoice );
+			return message;
+		}
 
-			var responseMessage = string.Empty;
-
-			if ( inv == null )
+		private void ValidateInvoiceExists( Invoice invoice )
+		{
+			if ( invoice == null )
 			{
 				throw new InvalidOperationException( "There is no invoice matching this payment" );
 			}
+		}
+
+		private void ValidateInvoiceWithZeroAmount( Invoice invoice )
+		{
+			if ( invoice.Amount == 0 && HasExistingPayments( invoice ) )
+			{
+				throw new InvalidOperationException( "The invoice is in an invalid state, it has an amount of 0 and it has payments." );
+			}
+		}
+
+		private bool HasExistingPayments( Invoice invoice )
+		{
+			return invoice.Payments != null && invoice.Payments.Any();
+		}
+
+		private bool IsInvoiceFullyPaid( Invoice invoice )
+		{
+			var totalPaid = invoice.Payments.Sum( x => x.Amount );
+			return totalPaid != 0 && invoice.Amount == totalPaid;
+		}
+
+		private bool IsPaymentExceedingRemaining( Invoice invoice, Payment payment )
+		{
+			var remaining = invoice.Amount - invoice.AmountPaid;
+			var totalPaid = invoice.Payments.Sum( x => x.Amount );
+			return totalPaid != 0 && payment.Amount > remaining;
+		}
+
+		private string ApplyPaymentToInvoice( Invoice invoice, Payment payment, bool hasExistingPayments )
+		{
+			var remaining = invoice.Amount - invoice.AmountPaid;
+			var isFullPayment = hasExistingPayments && remaining == payment.Amount || !hasExistingPayments && invoice.Amount == payment.Amount;
+			if ( invoice.Payments == null )
+			{
+				invoice.Payments = new List<Payment>();
+			}
+			if ( hasExistingPayments )
+			{
+				invoice.AmountPaid += payment.Amount;
+			}
 			else
 			{
-				if ( inv.Amount == 0 )
-				{
-					if ( inv.Payments == null || !inv.Payments.Any( ) )
-					{
-						responseMessage = "no payment needed";
-					}
-					else
-					{
-						throw new InvalidOperationException( "The invoice is in an invalid state, it has an amount of 0 and it has payments." );
-					}
-				}
-				else
-				{
-					if ( inv.Payments != null && inv.Payments.Any( ) )
-					{
-						if ( inv.Payments.Sum( x => x.Amount ) != 0 && inv.Amount == inv.Payments.Sum( x => x.Amount ) )
-						{
-							responseMessage = "invoice was already fully paid";
-						}
-						else if ( inv.Payments.Sum( x => x.Amount ) != 0 && payment.Amount > ( inv.Amount - inv.AmountPaid ) )
-						{
-							responseMessage = "the payment is greater than the partial amount remaining";
-						}
-						else
-						{
-							if ( ( inv.Amount - inv.AmountPaid ) == payment.Amount )
-							{
-								switch ( inv.Type )
-								{
-									case InvoiceType.Standard:
-										inv.AmountPaid += payment.Amount;
-										inv.Payments.Add( payment );
-										responseMessage = "final partial payment received, invoice is now fully paid";
-										break;
-									case InvoiceType.Commercial:
-										inv.AmountPaid += payment.Amount;
-										inv.TaxAmount += payment.Amount * 0.14m;
-										inv.Payments.Add( payment );
-										responseMessage = "final partial payment received, invoice is now fully paid";
-										break;
-									default:
-										throw new ArgumentOutOfRangeException( );
-								}
-								
-							}
-							else
-							{
-								switch ( inv.Type )
-								{
-									case InvoiceType.Standard:
-										inv.AmountPaid += payment.Amount;
-										inv.Payments.Add( payment );
-										responseMessage = "another partial payment received, still not fully paid";
-										break;
-									case InvoiceType.Commercial:
-										inv.AmountPaid += payment.Amount;
-										inv.TaxAmount += payment.Amount * 0.14m;
-										inv.Payments.Add( payment );
-										responseMessage = "another partial payment received, still not fully paid";
-										break;
-									default:
-										throw new ArgumentOutOfRangeException( );
-								}
-							}
-						}
-					}
-					else
-					{
-						if ( payment.Amount > inv.Amount )
-						{
-							responseMessage = "the payment is greater than the invoice amount";
-						}
-						else if ( inv.Amount == payment.Amount )
-						{
-							switch ( inv.Type )
-							{
-								case InvoiceType.Standard:
-									inv.AmountPaid = payment.Amount;
-									inv.TaxAmount = payment.Amount * 0.14m;
-									inv.Payments.Add( payment );
-									responseMessage = "invoice is now fully paid";
-									break;
-								case InvoiceType.Commercial:
-									inv.AmountPaid = payment.Amount;
-									inv.TaxAmount = payment.Amount * 0.14m;
-									inv.Payments.Add( payment );
-									responseMessage = "invoice is now fully paid";
-									break;
-								default:
-									throw new ArgumentOutOfRangeException( );
-							}
-						}
-						else
-						{
-							switch ( inv.Type )
-							{
-								case InvoiceType.Standard:
-									inv.AmountPaid = payment.Amount;
-									inv.TaxAmount = payment.Amount * 0.14m;
-									inv.Payments.Add( payment );
-									responseMessage = "invoice is now partially paid";
-									break;
-								case InvoiceType.Commercial:
-									inv.AmountPaid = payment.Amount;
-									inv.TaxAmount = payment.Amount * 0.14m;
-									inv.Payments.Add( payment );
-									responseMessage = "invoice is now partially paid";
-									break;
-								default:
-									throw new ArgumentOutOfRangeException( );
-							}
-						}
-					}
-				}
+				invoice.AmountPaid = payment.Amount;
 			}
-			
-			inv.Save();
+			invoice.TaxAmount = CalculateUpdatedTax( invoice, payment, hasExistingPayments );
+			invoice.Payments.Add( payment );
+			return GetPaymentMessage( hasExistingPayments, isFullPayment );
+		}
 
-			return responseMessage;
+		private decimal CalculateUpdatedTax( Invoice invoice, Payment payment, bool hasExistingPayments )
+		{
+			if ( invoice.Type == InvoiceType.Commercial )
+			{
+				var existingTax = hasExistingPayments ? invoice.TaxAmount : 0m;
+				var taxToAdd = payment.Amount * CommercialTaxRate;
+				return existingTax + taxToAdd;
+			}
+			return hasExistingPayments ? invoice.TaxAmount : 0m;
+		}
+
+		private string GetPaymentMessage( bool hasExistingPayments, bool isFullPayment )
+		{
+			if ( hasExistingPayments )
+			{
+				return isFullPayment ? "final partial payment received, invoice is now fully paid" : "another partial payment received, still not fully paid";
+			}
+			return isFullPayment ? "invoice is now fully paid" : "invoice is now partially paid";
 		}
 	}
 }
